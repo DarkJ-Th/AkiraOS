@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AkiraOS Web Flasher — ESP32-S3</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10.1.1/dist/web/install-button.js?module"></script>
+<style>
+  :root { --bg:#fff; --fg:#1b1b1f; --muted:#5b5b66; --card:#f5f5f8; --accent:#7f5af0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#121216; --fg:#ececf1; --muted:#a0a0ad; --card:#1d1d24; }
+  }
+  body { font-family: system-ui, "Noto Sans Thai", sans-serif; background:var(--bg); color:var(--fg);
+         max-width:680px; margin:0 auto; padding:24px 16px; line-height:1.6; }
+  h1 { margin-bottom:4px; }
+  .sub { color:var(--muted); margin-top:0; }
+  .card { background:var(--card); border-radius:12px; padding:16px 20px; margin:16px 0; }
+  code { background:rgba(127,127,127,.18); padding:1px 6px; border-radius:4px; }
+  esp-web-install-button { --esp-tools-button-color: var(--accent); }
+  ol { padding-left:20px; }
+</style>
+</head>
+<body>
+  <h1>AkiraOS Web Flasher</h1>
+  <p class="sub">ESP32-S3 DevKitM (N16R8) · แฟลชจากเบราว์เซอร์ ไม่ต้องใช้ Linux</p>
+
+  <div class="card">
+    <esp-web-install-button manifest="manifest.json">
+      <span slot="unsupported">เบราว์เซอร์นี้ไม่รองรับ Web Serial กรุณาใช้ Chrome หรือ Edge บนคอมพิวเตอร์</span>
+      <span slot="not-allowed">ต้องเปิดหน้านี้ผ่าน HTTPS</span>
+    </esp-web-install-button>
+  </div>
+
+  <div class="card">
+    <strong>ขั้นตอน</strong>
+    <ol>
+      <li>เสียบสาย USB เข้าพอร์ตที่เป็น USB/UART ของบอร์ด</li>
+      <li>กดปุ่ม Install แล้วเลือกพอร์ต COM</li>
+      <li>ติ๊ก Erase device สำหรับการติดตั้งครั้งแรก</li>
+      <li>ถ้าบอร์ดไม่เข้าโหมดแฟลช ให้กดค้าง <code>BOOT</code> แล้วแตะ <code>RST</code> จากนั้นปล่อย <code>BOOT</code></li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <strong>หลังแฟลชเสร็จ</strong>
+    <p>แอปเป็นไฟล์ <code>.wasm</code> ส่งผ่าน WiFi ได้เลย ไม่ต้องแฟลชซ้ำ:</p>
+    <p><code>curl -X POST --data-binary @app.wasm "http://&lt;device-ip&gt;/api/apps/install?name=app"</code></p>
+  </div>
+
+  <p class="sub">เฟิร์มแวร์นี้ยังไม่ได้เปิด Secure Boot / flash encryption จึงยังไม่เหมาะกับงานใช้จริงในภาคสนาม
+  ตรวจไฟล์ได้ด้วย <a href="SHA256SUMS">SHA256SUMS</a></p>
+</body>
+</html>
