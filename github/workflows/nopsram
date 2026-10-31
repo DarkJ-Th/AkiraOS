@@ -1,0 +1,157 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# การทดลอง: บิลด์ AkiraOS สำหรับ ESP32-S3 DevKitM โดย "ปิด PSRAM"
+# เพื่อทดสอบว่า Flash erase/write error 261 + "restore cache fail" เกี่ยวกับ PSRAM หรือไม่
+#
+# - รันด้วยมือเท่านั้น (workflow_dispatch)
+# - เผยแพร่ไว้ที่  https://<user>.github.io/<repo>/nopsram/
+# - ดึงหน้า flasher หลักที่ deploy อยู่แล้วมารวมไว้ด้วย จึงไม่ทับของเดิม
+#   (ถ้ายังไม่เคย deploy web-flasher หลัก จะมีเฉพาะ /nopsram/)
+#
+# คำเตือน: โค้ด AkiraOS ออกแบบให้ใช้ PSRAM (WAMR heap 1MB) เมื่อปิด PSRAM แล้ว
+# อาจลิงก์ไม่ผ่าน (DRAM overflow) หรือ heap ไม่พอ ถ้าล้มที่ขั้น Build AkiraOS
+# ให้ส่ง error บรรทัดสุดท้ายมา ซึ่งก็เป็นข้อมูลที่มีประโยชน์เช่นกัน
+name: web-flasher-nopsram
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  ZEPHYR_BOARD: esp32s3_devkitm/esp32s3/procpu
+  BOARD_ID: esp32s3_devkitm_esp32s3_procpu
+  ZEPHYR_TOOLCHAIN_VARIANT: zephyr
+  ZEPHYR_SDK_INSTALL_DIR: /opt/toolchains/zephyr-sdk-0.17.4
+  APP_OFFSET: "131072"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/zephyrproject-rtos/ci:v0.28.6@sha256:427a55fe95911ea97aa99fa0aedce95cb5550cbdd74f3525d23e35b2221f2335
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: akira-os
+          submodules: recursive
+
+      - name: West workspace
+        working-directory: akira-os
+        run: |
+          west init -l .
+          west update
+          west zephyr-export
+
+      - name: Zephyr SDK (xtensa esp32s3) ถ้ายังไม่มีใน image
+        run: |
+          if [ ! -f "$ZEPHYR_SDK_INSTALL_DIR/sdk_version" ]; then
+            mkdir -p /opt/toolchains
+            wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.17.4/zephyr-sdk-0.17.4_linux-x86_64.tar.xz
+            tar xf zephyr-sdk-0.17.4_linux-x86_64.tar.xz -C /opt/toolchains
+            (cd "$ZEPHYR_SDK_INSTALL_DIR" && ./setup.sh -t xtensa-espressif_esp32s3_zephyr-elf -h -c)
+          fi
+
+      - name: Fetch Espressif HAL blobs
+        working-directory: akira-os
+        run: west blobs fetch hal_espressif
+
+      # ---- จุดต่างจาก web-flasher หลัก: ตัดค่า PSRAM ออกจาก conf ของบอร์ด ----
+      - name: Disable PSRAM in board config
+        run: |
+          CONF="akira-os/snippets/akira-board/boards/${BOARD_ID}.conf"
+          # ลบทุกบรรทัดที่ตั้งค่า SPIRAM / AKIRA_PSRAM (ตั้งเป็น y ขณะ PSRAM ปิด Kconfig จะ error)
+          sed -i -E '/^CONFIG_[A-Z0-9_]*SPIRAM[A-Z0-9_]*=/d; /^CONFIG_AKIRA_PSRAM=/d' "$CONF"
+          # WAMR heap 1MB ต้องอยู่ใน PSRAM เมื่อไม่มี PSRAM ให้ลดลงเหลือขนาดที่ DRAM พอรับได้
+          sed -i -E 's/^CONFIG_WAMR_HEAP_SIZE=.*/CONFIG_WAMR_HEAP_SIZE=65536/' "$CONF"
+          echo "== PSRAM ที่เหลือใน conf (ควรว่าง) =="
+          grep -n -i "spiram\|AKIRA_PSRAM" "$CONF" || echo "(none)"
+
+      - name: Build MCUboot
+        run: |
+          ROOT="$GITHUB_WORKSPACE/akira-os"
+          west build --pristine -b "$ZEPHYR_BOARD" bootloader/mcuboot/boot/zephyr -d build-mcuboot -- \
+            -DBOARD_ROOT="$ROOT" -DDTS_ROOT="$ROOT" \
+            -DEXTRA_DTC_OVERLAY_FILE="$ROOT/snippets/akira-board/boards/${BOARD_ID}.overlay" \
+            -DEXTRA_CONF_FILE="$ROOT/boards/mcuboot-swap-move.conf"
+
+      - name: Build AkiraOS (no PSRAM)
+        run: |
+          west build --pristine -b "$ZEPHYR_BOARD" akira-os -d build-app
+
+      - name: Assemble experimental flasher
+        run: |
+          mkdir -p site
+          cp build-mcuboot/zephyr/zephyr.bin site/bootloader.bin
+          APP=build-app/zephyr/zephyr.signed.bin
+          [ -f "$APP" ] || APP=build-app/zephyr/zephyr.bin
+          cp "$APP" site/akiraos.bin
+          sed -e 's/AkiraOS Web Flasher/AkiraOS Web Flasher (ทดลอง: ไม่ใช้ PSRAM)/' \
+              akira-os/web/index.html > site/index.html
+
+          cat > site/manifest.json <<JSON
+          {
+            "name": "AkiraOS ESP32-S3 DevKitM (ทดลอง: ไม่ใช้ PSRAM)",
+            "version": "nopsram-${GITHUB_RUN_NUMBER}",
+            "new_install_prompt_erase": true,
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "bootloader.bin", "offset": 0 },
+                  { "path": "akiraos.bin", "offset": ${APP_OFFSET} }
+                ]
+              }
+            ]
+          }
+          JSON
+          python3 -m json.tool site/manifest.json > /dev/null
+
+          (cd site && sha256sum bootloader.bin akiraos.bin > SHA256SUMS)
+          echo "== ขนาดไฟล์ =="; ls -l site
+          echo "== หน่วยความจำ =="; size build-app/zephyr/zephyr.elf || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site-nopsram
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: site-nopsram
+          path: nopsram
+
+      # รวมหน้า flasher หลักที่ deploy อยู่ (ถ้ามี) ไว้ที่ราก และวางของทดลองที่ /nopsram/
+      - name: Merge with existing site
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          BASE="https://${OWNER}.github.io/${REPO}"
+          mkdir -p site
+          for f in index.html manifest.json bootloader.bin akiraos.bin SHA256SUMS; do
+            curl -fsSL "$BASE/$f" -o "site/$f" || echo "ไม่พบ $f บนเว็บหลัก (ข้ามได้)"
+          done
+          mv nopsram site/nopsram
+          ls -R site
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
